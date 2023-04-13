@@ -18,18 +18,22 @@ int main(int argc, const char *argv[]) {
     std::string root, sequence, append;
     validateArgs(argc, argv, root, sequence, append);
     std::cout <<"seq: "<< sequence << std::endl;
-    if(dataset_type == 0)
-        std::cout << "file name: accuracy_oxford_"<<append << std::endl;
-    if(dataset_type == 1)
-        std::cout << "file name: accuracy_mulran_"<<append << std::endl;
+    
     omp_set_num_threads(8);
     std::string datadir = root + sequence + "/radar";
     // Oxford original
     // std::string gt = root + sequence + "/gt/radar_odometry.csv";
+
     // Oxford mine
     std::string gt = root + sequence + "/gt_radar.csv";
 
     // std::string gt = root + sequcne + "/gps/gps.csv"
+    // Mulran
+    if(dataset_type==1){
+        datadir = root + sequence + "/sensor_data/radar/ray";
+        gt = root + sequence + "/gt_radar.csv";
+    }
+    
 
     // Oxford
     int min_range = 58;                 // min range of radar points (bin)
@@ -39,11 +43,10 @@ int main(int argc, const char *argv[]) {
     int cart_pixel_width = 942;         // height and width of cartesian image in pixels 3856 + 12 = 3868 original code: 964 3768/4 = 942
     bool interp = true;
     int navtech_version = CTS350;
+
     
-    // Mulran
+    //Mulran
     if(dataset_type==1){
-        datadir = root + sequence + "/sensor_data/radar/ray";
-        gt = root + sequence + "/gt_radar.csv";
         min_range = 58;                 // min range of radar points (bin)
         radar_resolution = 0.06;    // resolution of radar bins in meters per bin
         cart_resolution = 0.06*8;
@@ -53,37 +56,60 @@ int main(int argc, const char *argv[]) {
     }
 
     int keypoint_extraction = 0;        // 0: cen2018, 1: cen2019, 2: orb
-    // cen2018 parameters
-    float zq = 3.0;
-    int sigma_gauss = 17;
 
+    // cen2018 parameters
+    float zq = 2.0;
+    int sigma_gauss = 17;
+    float multipath_thres = 0.3;
+    int ang1 = 60;
+    int ang2 = 120;
+    int recon_dist = 100;
+   
     // cen2019 parameters
     int max_points = 10000;
     // ORB descriptor / matching parameters
     int patch_size = 21;                // width of patch in pixels in cartesian radar image
-    float nndr = 0.80;                  // Nearest neighbor distance ratio
+    float nndr = 0.70;                  // Nearest neighbor distance ratio
 
     // RANSAC
-    double ransac_threshold = 0.35;
+    double ransac_threshold = 0.2;
     double inlier_ratio = 0.90;
     int max_iterations = 100;
     // MDRANSAC
-    int max_gn_iterations = 10;
-    double md_threshold = pow(ransac_threshold, 2);
+    int max_gn_iterations = 1000;
+    double md_threshold = 0.2; //pow(ransac_threshold, 2);
     // DOPPLER
     double beta = 0.049;
+
+    if(dataset_type==1){
+        zq = 2.0;
+        sigma_gauss = 17;
+        multipath_thres = 0.3;
+        ang1 = 60;
+        ang2 = 120;
+        recon_dist = 100;
+        nndr = 0.60;
+        ransac_threshold = 0.15;
+    }
 
     // Get file names of the radar images
     std::vector<std::string> radar_files;
     get_file_names(datadir, radar_files);
     // File for storing the results of estimation on each frame (and the accuracy)
+
+    
+
     std::ofstream ofs;
-    if(dataset_type==0)
-        ofs.open("accuracy_oxford_" + append + ".csv", std::ios::out);
-    if(dataset_type==1)
-        ofs.open("accuracy_mulran_" + append + ".csv", std::ios::out);
+    if(dataset_type==0){
+        std::cout << "file name: accuracy_nr_oxford_"<<append<< std::endl;
+        ofs.open("accuracy_nr_oxford_" + append + ".csv", std::ios::out);
+    }
+    if(dataset_type==1){
+        std::cout << "file name: accuracy_nr_mulran_"<<append<< std::endl;
+        ofs.open("accuracy_nr_mulran_" + append + ".csv", std::ios::out);
+        }
     // ofs << "x,y,yaw,gtx,gty,gtyaw,time1,time2,xmd,ymd,yawmd,xdopp,ydopp,yawdopp\n";
-    ofs << "x,y,yaw,time1,xmd,ymd,yawmd,xdopp,ydopp,yawdopp\n";
+    ofs << "x,y,yaw,gtx,gty,time1,xmd,ymd,yawmd,xdopp,ydopp,yawdopp\n";
     // Create ORB feature detector
     cv::Ptr<cv::ORB> detector = cv::ORB::create();
     detector->setPatchSize(patch_size);
@@ -112,17 +138,17 @@ int main(int argc, const char *argv[]) {
         else if(dataset_type == 1)
             load_radar2(datadir + "/" + radar_files[i], times, azimuths, valid, fft_data, navtech_version);
 
-        // cv::Mat fft_data_nr = noise_removal(fft_data);
-
+        cv::Mat fft_data_nr = noise_removal(azimuths, fft_data, multipath_thres, radar_resolution, cart_resolution, cart_pixel_width, interp, navtech_version, dataset_type, ang1, ang2, recon_dist);
+        // return 0;
 
         if (keypoint_extraction == 0)
-            cen2018features(fft_data, zq, sigma_gauss, min_range, targets);
+            cen2018features_nr(fft_data,fft_data_nr, zq, sigma_gauss, min_range, targets);
         if (keypoint_extraction == 1)
             cen2019features(fft_data, max_points, min_range, targets);
         if (keypoint_extraction == 0 || keypoint_extraction == 1) {
-            radar_polar_to_cartesian(azimuths, fft_data, radar_resolution, cart_resolution, cart_pixel_width, interp, img2, CV_8UC1, navtech_version);  // NOLINT
-            // cv::imshow("cart",img2);
-            // cv::waitKey();
+            radar_polar_to_cartesian(azimuths, fft_data_nr, radar_resolution, cart_resolution, cart_pixel_width, interp, img2, CV_8UC1, navtech_version);  // NOLINT
+
+            // cv::imshow("ori",img2);
             polar_to_cartesian_points(azimuths, times, targets, radar_resolution, cart_targets2, t2);
             convert_to_bev(cart_targets2, cart_resolution, cart_pixel_width, patch_size, kp2, t2);
             // cen2019descriptors(azimuths, cv::Size(fft_data.cols, fft_data.rows), targets, cart_targets2,
@@ -139,7 +165,9 @@ int main(int argc, const char *argv[]) {
             continue;
         // Match keypoint descriptors
         std::vector<std::vector<cv::DMatch>> knn_matches;
-        matcher->knnMatch(desc1, desc2, knn_matches, 2);
+        // matcher->knnMatch(desc1, desc2, knn_matches, 2);
+
+        matcher->radiusMatch(desc1, desc2, knn_matches, 40);
 
         // Filter matches using nearest neighbor distance ratio (Lowe, Szeliski)
         std::vector<cv::DMatch> good_matches;
@@ -189,8 +217,8 @@ int main(int argc, const char *argv[]) {
         mdransac.getTransform(delta_t, Tmd);
         Tmd = Tmd.inverse();
 
-        Eigen::VectorXd wbar;
-        mdransac.getMotion(wbar);
+        // Eigen::VectorXd wbar;
+        // mdransac.getMotion(wbar);
 
         // MDRANSAC + Doppler
         mdransac.correctForDoppler(true);
@@ -207,11 +235,11 @@ int main(int argc, const char *argv[]) {
         //     std::cout << "ground truth odometry for " << time1 << " " << time2 << " not found... exiting." << std::endl;
         //     return 0;
         // }
-        // std::vector<double> gtvec;
-        // if (!get_groundtruth_odometry3(gt, time1, gtvec)) {
-        //     std::cout << "ground truth odometry for " << time1 << " not found... exiting." << std::endl;
-        //     return 0;
-        // }
+        std::vector<double> gtvec;
+        if (!get_groundtruth_odometry3(gt, time1, gtvec)) {
+            std::cout << "ground truth odometry for " << time1 << " not found... exiting." << std::endl;
+            return 0;
+        }
         float yaw = -1 * asin(T(0, 1));
         float yaw2 = -1 * asin(Tmd(0, 1));
         float yaw3 = -1 * asin(Tmd2(0, 1));
@@ -227,16 +255,16 @@ int main(int argc, const char *argv[]) {
         // Write estimated and ground truth transform to the csv file
         ofs << T(0, 2) << "," << T(1, 2) << "," << yaw << ","; // x y yaw
         // ofs << gtvec[0] << "," << gtvec[1] << "," << gtvec[5] << ",";
-        // ofs << gtvec[0] << "," << gtvec[1] << ","; // << gtvec[5] << ",";
+        ofs << gtvec[0] << "," << gtvec[1] << ","; // << gtvec[5] << ",";
         ofs << time1 << "," << Tmd(0, 3) << "," << Tmd(1, 3) << "," <<  yaw2 << ",";
         // motion compensation + doppler correction
         ofs << Tmd2(0, 3) << "," << Tmd2(1, 3) << "," << yaw3 << "\n";
 
-        // cv::Mat img_matches;
-        // cv::drawMatches(img1, kp1, img2, kp2, good_matches, img_matches, cv::Scalar::all(-1),
-        //          cv::Scalar::all(-1), std::vector<char>(), cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
-        // cv::imshow("good", img_matches);
-        // cv::waitKey(0);
+    //     cv::Mat img_matches;
+    //     cv::drawMatches(img1, kp1, img2, kp2, good_matches, img_matches, cv::Scalar::all(-1),
+    //              cv::Scalar::all(-1), std::vector<char>(), cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
+    //     cv::imshow("good", img_matches);
+    //     cv::waitKey(0);
     }
     
 

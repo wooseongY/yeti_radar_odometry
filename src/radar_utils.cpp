@@ -28,6 +28,7 @@ struct less_than_img {
 
 void get_file_names(std::string path, std::vector<std::string> &files, std::string extension) {
     DIR *dirp = opendir(path.c_str());
+    std::cout<<path<<std::endl;
     struct dirent *dp;
     while ((dp = readdir(dirp)) != NULL) {
         if (exists(dp->d_name)) {
@@ -44,9 +45,12 @@ void get_file_names(std::string path, std::vector<std::string> &files, std::stri
     std::sort(files.begin(), files.end(), less_than_img());
 }
 
+
+
 void load_radar(std::string path, std::vector<int64_t> &timestamps, std::vector<double> &azimuths,
     std::vector<bool> &valid, cv::Mat &fft_data, int navtech_version) {
     int encoder_size = 5600;
+    
     cv::Mat raw_example_data = cv::imread(path, cv::IMREAD_GRAYSCALE);
     int N = raw_example_data.rows;
     timestamps = std::vector<int64_t>(N, 0);
@@ -62,10 +66,77 @@ void load_radar(std::string path, std::vector<int64_t> &timestamps, std::vector<
         timestamps[i] = *((int64_t *)(byteArray));
         azimuths[i] = *((uint16_t *)(byteArray + 8)) * 2 * M_PI / double(encoder_size);
         valid[i] = byteArray[10] == 255;
+        // std::cout<<timestamps[i]<<","<<azimuths[i]*5600/2/M_PI<<std::endl;
         for (int j = 42; j < range_bins; j++) {
             fft_data.at<float>(i, j) = (float)*(byteArray + 11 + j) / 255.0;
+            // std::cout<<fft_data.at<float>(i, j)<<std::endl;
+            // cv::waitKey();
         }
     }
+    // cv::imshow("fft",fft_data);
+    // cv::waitKey();
+    // std::cout<<fft_data.size()<<std::endl;
+}
+
+// Mulran
+void load_radar2(std::string path, std::vector<int64_t> &timestamps, std::vector<double> &azimuths,
+    std::vector<bool> &valid, cv::Mat &fft_data, int navtech_version) {
+    int encoder_size = 5600;
+    int N = 400;
+    timestamps = std::vector<int64_t>(N, 0);
+    azimuths = std::vector<double>(N, 0);
+    valid = std::vector<bool>(N, true);
+    int range_bins = 3768;
+    if (navtech_version == CIR204)
+        range_bins = 3360;
+    fft_data = cv::Mat::zeros(N, range_bins, CV_32F);
+    
+    const char delimiter = ',';
+    std::ifstream file(path);
+    std::string line;
+    int rows = 0;
+    int cols = 0;
+    if (file.is_open()) {
+        while (std::getline(file, line)) {
+            std::stringstream ss(line);
+            std::string cell;
+            int current_cols = 0;
+            while (std::getline(ss, cell, delimiter)) {
+                double value = std::stof(cell);
+                if(current_cols==0){
+                    timestamps[rows] = value;
+                    current_cols++;
+                    continue;
+                }
+                else if(current_cols==1 || current_cols==3){
+                    current_cols++;
+                    continue;
+                }
+                else if(current_cols==2){
+                    azimuths[rows] = value * 2 * M_PI / double(encoder_size);
+                    current_cols++;
+                    continue;
+                }
+                // std::cout<<value<<std::endl;
+                fft_data.at<float>(rows, current_cols-4) = (float)value/255.0;
+                current_cols++;
+            }
+            if (rows == 0) {
+                cols = current_cols;
+            } else if (cols != current_cols) {
+                std::cerr << "Inconsistent column count in CSV file" << std::endl;
+                exit(1);
+            }
+            ++rows;
+        }
+    } else {
+        std::cerr << "Unable to open CSV file" << std::endl;
+        exit(1);
+    }
+    // std::cout<<fft_data.size()<<std::endl;
+    // cv::imshow("fft",fft_data);
+    // cv::waitKey();
+    
 }
 
 // file is in the oxford dataset format
@@ -401,6 +472,26 @@ bool get_groundtruth_odometry2(std::string gtfile, int64_t t, std::vector<double
     return gtfound;
 }
 
+bool get_groundtruth_odometry3(std::string gtfile, int64 t1, std::vector<double> &gt) {
+    std::ifstream ifs(gtfile);
+    std::string line;
+    std::getline(ifs, line);
+    gt.clear();
+    bool gtfound = false;
+    while (std::getline(ifs, line)) {
+        std::vector<std::string> parts;
+        boost::split(parts, line, boost::is_any_of(","));
+        if (std::stoll(parts[0]) == t1) {
+            for (int i = 1; i < 3; ++i) {
+                gt.push_back(std::stof(parts[i]));
+            }
+            gtfound = true;
+            break;
+        }
+    }
+    return gtfound;
+}
+
 // use img2
 void draw_matches(cv::Mat &img, std::vector<cv::KeyPoint> kp1, std::vector<cv::KeyPoint> kp2,
     std::vector<cv::DMatch> matches, int radius) {
@@ -476,4 +567,145 @@ int validateArgs(const int argc, const char *argv[], std::string &root, std::str
         }
     }
     return 0;
+}
+
+cv::Mat noise_removal(std::vector<double> &azimuths, cv::Mat &fft_data,float multipath_thres, float radar_resolution,
+                    float cart_resolution, int cart_pixel_width, bool interpolate_crossover, int navtech_version, int dataset_type, int angle1, int angle2, int recon_dist){
+
+    // double thres = 0.1;
+    // double multipath_thres = 0.3; // 0.2?
+    cv::Mat polar_removed = fft_data.clone();
+    
+    cv::Mat img_cart_original;
+    cv::Mat img_canny;
+    int range_bin = fft_data.cols;
+    int azimuth_bin = fft_data.rows;
+
+    radar_polar_to_cartesian(azimuths, fft_data, radar_resolution, cart_resolution, cart_pixel_width, interpolate_crossover, img_cart_original, CV_8UC1, navtech_version);
+    cv::imshow("cart",img_cart_original);
+#pragma omp parallel for collapse(2)
+    for(int az1 = 0; az1<azimuth_bin; az1++){
+        for(int r1=0; r1<range_bin; r1++){
+
+            if(fft_data.at<float>(az1,r1) < multipath_thres){
+                continue;
+            }
+            
+            for(int az2 = 0; az2<azimuth_bin; az2++){
+                if(abs(az1 - az2) < angle1 || abs(az1 - az2) > angle2)
+                    continue;
+
+                for(int r2 = r1; r2<range_bin;r2++){
+                    if(fft_data.at<float>(az2,r2) < multipath_thres)
+                        continue;
+                    
+                    double angle_diff = abs(az1-az2)*2*M_PI/400;
+                    double cos_angle_diff = cos(angle_diff);
+                    int dist = cvRound(sqrt(r2*r2+r1*r1-2*r1*r2*cos_angle_diff));
+
+                    if(dist>recon_dist && r1+dist < range_bin){
+                        polar_removed.at<float>(az1,r1+dist)=0;
+                    }
+                }
+
+            }
+        }
+    }
+
+
+    cv::Mat img_cart_thres;
+
+    cv::threshold(img_cart_original, img_cart_thres, 100, 255, cv::THRESH_TOZERO);
+
+    cv::Canny(img_cart_thres, img_canny, 220, 250); // need to modify threshold 
+
+    std::vector<cv::Vec2f> lines;
+
+    cv::HoughLines(img_canny, lines, 1, CV_PI / 180, 100);
+
+    cv::Mat img_hough;
+    img_hough = img_cart_thres.clone();
+
+    float img_center = cart_pixel_width/2;
+
+
+    // cv::Mat img_rm1;
+    // radar_polar_to_cartesian(azimuths, polar_removed, radar_resolution, cart_resolution, cart_pixel_width, interpolate_crossover, img_rm1, CV_8UC1);
+    // cv::imshow("img_rm_bf",img_rm1);
+
+
+    for (size_t i = 0; i < lines.size(); i++)
+	{
+		float rho = lines[i][0], theta = lines[i][1];
+        
+
+		cv::Point pt1, pt2;
+		double cos_t = cos(theta), sin_t = sin(theta);
+		double x0 = cos_t * rho, y0 = sin_t * rho;
+
+		pt1.x = cvRound(x0 + 1000 * (-sin_t));
+		pt1.y = cvRound(y0 + 1000 * (cos_t));
+		pt2.x = cvRound(x0 - 1000 * (-sin_t));
+		pt2.y = cvRound(y0 - 1000 * (cos_t));
+
+		// cv::line(img_cart_original, pt1, pt2, cv::Scalar(255,0,255), 2, 8);
+        
+        float center_dist = fabs(cos_t * img_center + sin_t * img_center - rho);
+
+        if(center_dist>30){
+            // cv::line(img_cart_original, pt1, pt2, cv::Scalar(255,0,255), 2, 8);
+            // std::cout<<rho<<", "<<theta*180/M_PI<<std::endl;
+#pragma omp parallel for collapse(2)
+            for(int t = 0; t<azimuth_bin; t++){
+                for(int r=0; r<range_bin; r++){
+                    float rr = r * cart_pixel_width/2 / range_bin;
+                    // std::cout<<rr<<std::endl;
+                    int x = img_center + cvRound( rr * sin(t*2*M_PI/azimuth_bin));
+                    int y = img_center - cvRound( rr * cos(t*2*M_PI/azimuth_bin));
+
+                    float dist = fabs(cos_t * x + sin_t * y - rho);
+                    // std::cout<<cv::Point(x,y)<<"dist: "<<dist<<std::endl;
+                    if((r<range_bin/2 && x>=0 && x < cart_pixel_width && y>=0 && y < cart_pixel_width && dist<40) || fft_data.at<float>(t,r) < multipath_thres){                            
+                        // cv::circle(img_cart_original, cv::Point(x,y), 3,(255,0,255),1,8);
+                        polar_removed.at<float>(t,r) = fft_data.at<float>(t,r);
+                    }
+                    
+                }
+            }
+
+//             int rho_range=5;
+//             for(int distance = rho - rho_range; distance < rho + rho_range; distance++){
+// #pragma omp parallel for
+//                 for (int x = 0; x < cart_pixel_width; x++) {
+//                     int y = cvRound((distance - x * cos_t) / sin_t);
+//                     if (y >= 0 && y < cart_pixel_width) {
+                        
+//                         cv::circle(img_cart_original, cv::Point(x,y), 3,(255,0,255),1,8);
+//                         float r = (sqrt(pow(x, 2) + pow(y, 2)) - radar_resolution / 2) / radar_resolution;
+//                         float t = atan2f(y, x);
+//                         if (t < 0)
+//                             t += 2 * M_PI;
+
+//                         if(r < range_bin && t < azimuth_bin){
+//                             polar_removed.at<float>(t,r) = fft_data.at<float>(t,r);
+//                         }
+//                     }
+//                 }
+//             }
+        }
+
+	}
+    
+    // visualization
+    cv::Mat img_rm;
+    radar_polar_to_cartesian(azimuths, polar_removed, radar_resolution, cart_resolution, cart_pixel_width, interpolate_crossover, img_rm, CV_8UC1, navtech_version);
+    
+    // cv::imshow("img_rm1",img_rm);
+    // cv::waitKey();
+    // // cv::imshow("img_original",img_cart_original);
+    // // // cv::imshow("img_canny",img_canny);
+    // // // cv::imshow("img_hough",img_hough);
+    
+    
+    return polar_removed;
 }

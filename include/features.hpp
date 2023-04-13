@@ -24,6 +24,7 @@ void cfar1d(cv::Mat fft_data, int window_size, float scale, int guard_cells, int
    \param targets [out] Matrix of feature locations (azimuth_bin, range_bin, 1) x N
 */
 double cen2018features(cv::Mat fft_data, float zq, int sigma_gauss, int min_range, Eigen::MatrixXd &targets);
+double cen2018features_nr(cv::Mat fft_data, cv::Mat fft_data_nr, float zq, int sigma_gauss, int min_range, Eigen::MatrixXd &targets);
 
 /*!
    \brief Extract features from polar radar data using the method described in cen_icra19

@@ -4,6 +4,11 @@
 #include <string>
 #include <opencv2/core.hpp>
 #include <boost/algorithm/string.hpp>
+#include "radar_utils.hpp"
+#include <opencv2/opencv.hpp>
+#include <cmath>
+#include <cstdlib>
+
 
 #define CTS350 0
 #define CIR204 1
@@ -24,8 +29,12 @@ void get_file_names(std::string datadir, std::vector<std::string> &radar_files, 
    \param valid [out] Mask of whether azimuth data is an original sensor reasing or interpolated from adjacent azimuths
    \param fft_data [out] Radar power readings along each azimuth
 */
+
+// cv::Mat readCSV(const std::string& csv_file);
 void load_radar(std::string path, std::vector<int64_t> &timestamps, std::vector<double> &azimuths,
     std::vector<bool> &valid, cv::Mat &fft_data, int navtech_version = CTS350);
+void load_radar2(std::string path, std::vector<int64_t> &timestamps, std::vector<double> &azimuths,
+    std::vector<bool> &valid, cv::Mat &fft_data, int navtech_version = CIR204);
 
 void load_velodyne(std::string path, std::vector<int64_t> &timestamps, std::vector<double> &azimuths,
     Eigen::MatrixXd &pc);
@@ -112,6 +121,8 @@ bool get_groundtruth_odometry(std::string gtfile, int64 t1, int64 t2, std::vecto
 
 bool get_groundtruth_odometry2(std::string gtfile, int64_t t, std::vector<double> &gt);
 
+bool get_groundtruth_odometry3(std::string gtfile, int64_t t, std::vector<double> &gt);
+
 void draw_matches(cv::Mat &img, std::vector<cv::KeyPoint> kp1, std::vector<cv::KeyPoint> kp2,
     std::vector<cv::DMatch> matches, int radius = 4);
 
@@ -123,3 +134,6 @@ void getTimes(Eigen::MatrixXd cart_targets, std::vector<double> azimuths, std::v
 */
 int validateArgs(const int argc, const char *argv[], std::string &root, std::string &seq, std::string &app);
 int validateArgs(const int argc, const char *argv[], std::string &root);
+
+cv::Mat noise_removal(std::vector<double> &azimuths, cv::Mat &fft_data, float multipath_thres, float radar_resolution, float cart_resolution,
+int cart_pixel_width, bool interpolate_crossover, int navtech_version, int dataset_type, int angle1, int angle2, int recon_dist);
