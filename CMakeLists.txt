@@ -8,7 +8,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 set(OMP_NUM_THREADS 8)
 
-find_package(OpenCV 3 REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS
     system
@@ -28,6 +28,13 @@ include_directories(
     ${EIGEN_INCLUDE_DIR}
 )
 
+link_directories(
+	include
+	${Boost_INCLUDE_DIRS}
+  	${OpenCV_LIBRARY_DIRS}
+  	${EIGEN_INCLUDE_DIR}
+)
+
 get_property(dirs DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES)
 foreach(dir ${dirs})
   message(STATUS "dir='${dir}'")
@@ -40,7 +47,8 @@ add_library(features
 target_link_libraries(features
 	${catkin_LIBRARIES}
 	${OpenCV_LIBRARIES}
-	${Boost_INCLUDE_DIRS}
+	# ${Boost_INCLUDE_DIRS}
+	${Boost_FILESYSTEM_LIBRARY}
     Eigen3::Eigen
 )
 
@@ -51,7 +59,8 @@ add_library(radar_utils
 target_link_libraries(radar_utils
 	${catkin_LIBRARIES}
 	${OpenCV_LIBRARIES}
-	${Boost_INCLUDE_DIRS}
+	# ${Boost_INCLUDE_DIRS}
+	${Boost_FILESYSTEM_LIBRARY}
     Eigen3::Eigen
 )
 
@@ -61,7 +70,8 @@ add_library(association
 
 target_link_libraries(association
 	${catkin_LIBRARIES}
-	${Boost_INCLUDE_DIRS}
+	# ${Boost_INCLUDE_DIRS}
+	${Boost_FILESYSTEM_LIBRARY}
     Eigen3::Eigen
 )
 
@@ -71,11 +81,21 @@ target_link_libraries(visualization
     radar_utils
 	${catkin_LIBRARIES}
 	${OpenCV_LIBRARIES}
-	${Boost_INCLUDE_DIRS}
+	# ${Boost_INCLUDE_DIRS}
+	${Boost_FILESYSTEM_LIBRARY}
 )
 
 add_executable(odometry src/odometry.cpp)
 target_link_libraries(odometry
+    features
+    radar_utils
+    association
+	${catkin_LIBRARIES}
+	${OpenCV_LIBRARIES}
+)
+
+add_executable(odometry_nr src/odometry_nr.cpp)
+target_link_libraries(odometry_nr
     features
     radar_utils
     association
